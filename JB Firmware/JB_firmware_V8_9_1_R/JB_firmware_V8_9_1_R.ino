@@ -64,7 +64,6 @@ const int V_AC_sensitivity = 204; // normally 182 for V8.9 boards with 0.5s dela
 // #define BuzzerIndication // indicate charging states via buzzer - only on V8.7 and higher
 #define OTP // overtemp protection
 #define PCBHeater // // in V8.9+ PCBs, there is a 6W heating pad on the PCB to heat the sensitive stuff in extreme cold temps (2s2p 10k 2W SMT resistors on bottom of board)
-// #define LCD_SGC // old version of the u144 LCD - used in some early JuiceBoxes
 //------------------------------- END MAIN SWITCHES ------------------------------
 
 #include <Arduino.h>
@@ -75,29 +74,9 @@ const int V_AC_sensitivity = 204; // normally 182 for V8.9 boards with 0.5s dela
 #include <EEPROM.h>
 #include "EEPROM_VMcharger.h"
 
-// WiFi library mega slon
-#ifndef RASPI
-#include <SoftwareSerial.h>
-//#include <WiFlyHQ.h>
-#endif
-
-//-------------------- WiFi UDP settings --------------------------------------------------------------------
-const char UDPpacketEndSig[2] = "\n"; // what is the signature of the packet end (should match the WiFly setting)
 
 // need this to remap PWM frequency
 #include <TimerOne.h>
-
-// our LCD library for 4D systems display (http://www.4dsystems.com.au/prod.php?id=121)
-// 4D Systems in its infinite wisdom decided to completely change the command set in its new
-// release of the LCDs so we (and other countless developers) had to completely rewrite our
-// LCD libraries
-#ifdef LCD_SGC
-#include <uLCD_144.h>
-uLCD_144 *myLCD;
-#else
-#include <uLCD_144_SPE.h>
-uLCD_144_SPE *myLCD;
-#endif
 
 byte LCD_on = 0; // this defines base vs. premium versions
 byte REMOTE_ON = 0; // this tells us if a remote is present or not
@@ -129,22 +108,23 @@ const byte pin_throttle120 = 5; // when RTC is not used, this is an input used t
 // A0 and A1 functions will in turn be moved to A6 and A7
 
 //---------------- digital inputs / outputs
-const byte pin_sRX = 2; // SoftSerial RX - used for WiFi
-const byte pin_sTX = 4; // SoftSerial TX - used for WiFi
+const byte pin_ctrlBtn_A = 11; // control button 3 ("A" on the remote, receiver pin 0)
+const byte pin_ctrlBtn_B = 10;
+const byte pin_ctrlBtn_C = 6; // control button 1 ("C" on the remote, receiver pin 2)
+const byte pin_ctrlBtn_D = 8; // control button 2 ("D" on the remote, receiver pin 3)
+
+
 // GFI trip pin - goes high on GFI fault, driven by the specialized circuit based on LM1851
 // has to be pin 3 as only pin 2 and 3 are available for interrupts on Pro Mini
 const byte pin_GFI = 3;
 const byte pin_inRelay = 5;
-const byte pin_ctrlBtn_C = 6; // control button 1 ("C" on the remote, receiver pin 2)
 const byte pin_GFIreset = 7; // this is new for 8.9+ boards - reset pin (active LOW) for the D-latch that gets set upon GFI trip
-const byte pin_ctrlBtn_D = 8; // control button 2 ("D" on the remote, receiver pin 3)
 const byte pin_PWM = 9; // J pilot PWM pin
 
 // pulling this pin high will trigger WPS application on the wifi module - on premium units,
 // this is also tied to one of the buttons of the remote so no Arduino action is needed
 const byte pin_WPS = 10; // ("B" on the remote, receiver pin 1)
 
-const byte pin_ctrlBtn_A = 11; // control button 3 ("A" on the remote, receiver pin 0)
 const byte pin_GFItest = 12; // pin wired to a GFCI-tripping relay - for the periodic testing of the GFCI circuit & stuck relay detection
 const byte pin_PCBHeater = 13; // in V8.9+ PCBs, there is a 6W heating pad on the PCB to heat the sensitive stuff in extreme cold temps (2s2p 10k 2W SMT resistors on bottom of board)
 #ifdef BuzzerIndication
@@ -255,18 +235,6 @@ const char *daysStr[7] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
 byte day = 5, hour = 12, mins = 0; // default day is Sat, time is noon, 0 min
 //------------ end timing params ---------------------------
 
-
-#ifndef RASPI
-#ifdef JB_WiFi_simple
-SoftwareSerial wifiSerial(pin_sRX, pin_sTX);
-#endif
-
-#ifdef JB_WiFi
-SoftwareSerial wifiSerial(pin_sRX, pin_sTX);
-WiFly wifly;
-#endif
-#endif
-
 //-------------------------------------- BUZZER CODE -----------------------------------------------------
 int tmr2cnt = 0;
 int tmr2cnt2 = 0;
@@ -313,6 +281,7 @@ void setup()
   // set digital input pins
   pinMode(pin_GFI, INPUT);
   pinMode(pin_ctrlBtn_A, INPUT);
+  pinMode(pin_ctrlBtn_B, INPUT);
   pinMode(pin_ctrlBtn_C, INPUT);
   pinMode(pin_ctrlBtn_D, INPUT_PULLUP); // this has to be INPUT_PULLUP as this one is used for detection of remote (thanks Bill Butts!
 
@@ -353,25 +322,6 @@ void setup()
   sei();
   //---------------------------------- end timer setup
 
-  //================= initialize the display ===========================================
-#ifdef LCD_SGC
-  *myLCD = uLCD_144(9600);
-#else
-  *myLCD = uLCD_144_SPE(9600);
-#endif
-  //================= finish display init ==============================================
-
-  // check if the display started / is present
-  // if not present, we will assume this is the Base edition
-#ifndef RASPI
-  LCD_on = myLCD->isAlive();
-#endif
-
-#ifndef RASPI
-#ifdef JB_WiFi_simple
-  wifiSerial.begin(9600);
-#endif
-#endif
   // the time settings only valid in the PREMIUM edition
   // load day/hour from the configuration (EEPROM)
   EEPROM_readAnything(0, configuration);
@@ -403,21 +353,10 @@ void setup()
   hour = limit(hour, 0, 23);
   mins = limit(mins, 0, 60);
 
-  // will need to add pull of the true RTC time from a WiFi module here
-#ifdef JB_WiFi_simple
-  // enter command mode, run 'get time'
-#endif
-
   // set the clock offset; later in code, #of sec from midnight can be calculated as
   //     sec_up-clock_offset
   clock_offset = sec_up - long(day * 24 + hour) * 3600 - long(mins) * 60;
 
-  if (LCD_on) { // this is a PREMIUM edition with LCD
-    myLCD->setOpacity(1);
-    myLCD->setMode(1); // reverse landscape
-
-    printClrMsg(F("Thank You for\nchoosing \nJ.u.i.c.e B.o.x !!!"), 5000, 0, 0x3f, 0);
-  }
 
   // auto-sense the remote
   // button D pin is set as INPUT_PULLUP - this means that if there is no remote, it will read '1'
@@ -514,8 +453,6 @@ void setup()
   // set watchdog - http://tushev.org/articles/arduino/item/46-arduino-and-watchdog-timer, http://www.nongnu.org/avr-libc/user-manual/group__avr__watchdog.html
   wdt_enable(WDTO_8S); // longest is 8S
 
-  myclrScreen();
-
   // initialize in state A - EVSE ready
   setPilot(PWM_FULLON);
 
@@ -529,14 +466,25 @@ void loop()
   prev_state = state;
   state = getState(); // this is a blocking call for <100ms
   //state = STATE_C;
-
+  if(isBtnPressed(pin_ctrlBtn_A) || isBtnPressed(pin_ctrlBtn_B) || 
+    isBtnPressed(pin_ctrlBtn_C) ||isBtnPressed(pin_ctrlBtn_D))
+    {
+      if(isBtnPressed(pin_ctrlBtn_A))
+        sendButtonMsg('A');
+      else if (isBtnPressed(pin_ctrlBtn_B))
+        sendButtonMsg('B');
+      else if (isBtnPressed(pin_ctrlBtn_C))
+        sendButtonMsg('C');
+      else if (isBtnPressed(pin_ctrlBtn_D))
+        sendButtonMsg('D');
+    }
   // manage state changes
   if (state != prev_state) {
-    myclrScreen();
     timer = millis(); // start timer
     timer0 = timer; // remember the start of charge
 
-    if (state == STATE_C) {
+    if (state == STATE_C) 
+    {
       // entering charging state - check for diode
       setPilot(PWM_FULLON / 2);
       if (read_pV() > -1.5) {
@@ -569,11 +517,8 @@ void loop()
     min2nextrun = timeToNextRun();
     if (min2nextrun > 0 && !isBtnPressed(pin_ctrlBtn_C) && REMOTE_ON) {
       sprintf(str, "Wait %d min    ", min2nextrun);
-      printJBstr(0, 12, 1, 0x1f, 0x3f, 0x1f, str);
       setPilot(PWM_FULLON);
     } else {
-      // clear part of screen
-      printJBstr(0, 12, 1, 0x1f, 0x3f, 0x1f, F("               "));
       setOutC();
       setPilot(duty);
     }
@@ -591,23 +536,15 @@ void loop()
     delta = int(millis() - timer);
     timer = millis();
     energy += power * delta / 1000 / 3600;
-
-    // print real-time stats
-    printTime();
+    
     sprintf(str, "Power: %d.%01d KW  ", int(power), int(power * 10) % 10);
-    printJBstr(0, 2, 2, 0x1f, 0x3f, 0, str);
     sprintf(str, "Time: %d min  ", int((timer - timer0) / 1000) / 60);
-    printJBstr(0, 3, 2, 0x1f, 0x3f, 0, str);
     // also show energy cost in this one
     // use US average cost per http://www.eia.gov/electricity/monthly/epm_table_grapher.cfm?t=epmt_5_6_a - $0.12/kwhr
     sprintf(str, "%d.%01d KWH ($%d.%02d) ", int(energy), int(energy * 10) % 10, int(energy / 8), int(energy / 8 * 100) % 100 );
-    printJBstr(0, 5, 2, 0x1f, 0x3f, 0, str);
     sprintf(str, "%dV, %dA (%d) ", int(inV_AC), int(outC_meas), int(outC));
-    printJBstr(0, 7, 2, 0x1f, 0x3f, 0, str);
-
-    // print button menu
-    printJBstr(0, 9, 2, 0, 0, 0x1f, F("A=outC+, D=outC- \nB=WPS"));
-
+    
+    #ifndef RASPI
     // process any current adjustment requests
     if (isBtnPressed(pin_ctrlBtn_A) && REMOTE_ON) 
 	{
@@ -619,22 +556,18 @@ void loop()
       if (inV_AC > 160) configuration.outC_240--;
       else configuration.outC_120--;
     }
-
-    // send out a report to MotherShip via WiFi if on
-    // this is a CHARGING state report
-#ifdef JB_WiFi_simple
+    #endif
+    
+#ifdef RASPI
     if ( int(sec_up - timer_sec) > type2_reportMask || timer_sec == 0) {
       timer_sec = sec_up;
-#ifdef RASPI
+
       sprintf(str, "%d,%d,%d,%d,%d", int(inV_AC), int(configuration.energy + energy), int(energy * 10), int(outC_meas * 10), int(power * 10));
-#endif
-#ifndef RASPI
-      sprintf(str, "V%d,L%d,E%d,A%d,P%d", int(inV_AC), int(configuration.energy + energy), int(energy * 10), int(outC_meas * 10), int(power * 10));
-#endif
       sendWiFiMsg(str);
     }
 #endif
   } // end state_C
+  
 
   if (state == STATE_D) {
     // printClrMsg(F("Vehicle requested\nVENTILATED power!\nExiting..."), 1000, 0x1f, 0x3f, 0);
@@ -658,44 +591,6 @@ void loop()
 
     int savings = int(configuration.energy * savingsPerKWH / 100);
 
-    printTime();
-
-    if (LCD_on) {
-      if (state == STATE_A) {
-        switch (cycleVar) {
-          case 2:
-            cycleVar = 0;
-          case 0:
-            myLCD->printStr(0, 2, 2, 0x1f, 0x3f, 0, F("READY -   "));
-            break;
-          case 1:
-            myLCD->printStr(0, 2, 2, 0x1f, 0x3f, 0, F("READY |   "));
-            break;
-          default: break;
-        }
-        cycleVar++;
-      }
-
-      // output some key standby info - this is the default screen before charging commences
-      sprintf(str, "Life: %d KWH", int(configuration.energy)); myLCD->printStr(0, 4, 2, 0, 0x3f, 0x1f, str);
-      sprintf(str, "Saved: %d$", savings); myLCD->printStr(0, 5, 2, 0, 0x3f, 0x1f, str);
-      sprintf(str, "Last: %d.%01d KWH", int(energy), int(energy * 10) % 10); myLCD->printStr(0, 7, 2, 0x1f, 0, 0x1f, str);
-      sprintf(str, "Set: %dV, %dA    ", int(inV_AC), int(outC)); myLCD->printStr(0, 8, 2, 0x1f, 0x3f, 0x1f, str);
-#ifdef DEBUG2
-      int reading = analogRead(pin_C);
-      delay(8);
-      reading += analogRead(pin_C);
-      sprintf(str, "A2:%d=%dA  ", int(reading * 5. / 2 / 10.24), int(read_C() * 10)); myLCD->printStr(0, 9, 2, 0x1f, 0x3f, 0x1f, str);
-      delay(500); // before overwriting below
-#endif
-
-      // print button menu
-      printJBstr(0, 10, 2, 0, 0, 0x1f, F("A=MENU, B=WPS \nC=FORCE START"));
-
-      if (isBtnPressed(pin_ctrlBtn_A)) ctrlMenu();
-
-    } else {
-
 #ifndef RASPI
       // no LCD
       sprintf(str, "%dV, %dA", int(inV_AC), int(outC));
@@ -708,11 +603,9 @@ void loop()
         Serial.print(configuration.IDstamp[iii]); // 10-50 digit ID - unique to each JuiceBox
       }
       Serial.println();
-      sprintf(str, "    pilot=%d, inACpin=%d", int(V_J1772_pin_ * 1000), int(analogRead(pin_V)*Aref));
       Serial.println(str);
 #endif
 
-    }
 
     // send out a report to MotherShip via WiFi if WiFi is enabled
     // this is a STANDBY state report
@@ -731,16 +624,12 @@ void loop()
 
   }
 
-  delay(meas_cycle_delay); // reasonable delay for screen refresh
-
 #ifdef GFI
   // check GFI flag (if a trip is detected, this flag would be set via the special interrupt)
   if (GFI_tripped) {
-    printClrMsg(F("GFI tripped!\nRetrying in 15 min..."), 300, 0x1f, 0x3f, 0);
     GFI_trip_count++; // allowed max of 4; if more than 4, need 2 user inputs to override
     if (GFI_trip_count > 4) {
       // wait for user to unplug; since the user then will have to re-plug to re-energize the system, this can be considered 2 actions
-      printClrMsg(F("4th GFI trip!\nUnplug / re-plug\nto resume"), 1000, 0x1f, 0x3f, 0);
       while (getState() != STATE_A);
       GFI_trip_count = 0; // reset for the next set of 4
     } else {
@@ -753,39 +642,6 @@ void loop()
       ResetGFI();
     }
   }
-#endif
-
-  // WiFi control!
-#ifndef RASPI
-#ifdef JB_WiFi_control
-  // see if there is anything in the receive buffer - this can only be in response to one of the reports sent by JB
-  if (wifiSerial.available() > 0) {
-    byte ii = 0;
-    byte start_data = 0;
-    str[0] = str[1] = str[2] = str[3] = str[4] = 0;
-    while (wifiSerial.available() > 0) {
-      tempstr[ii] = wifiSerial.read();
-      if (tempstr[ii] == '\n') start_data = 0;
-
-      if (start_data) {
-        ii++;
-        if (ii > 15) break; // no more than 16 symbols in command
-      }
-      tempstr[ii] = 0; // terminate string
-
-      str[0] = str[1]; str[1] = str[2]; str[2] = str[3]; str[3] = tempstr[ii]; str[4] = 0;
-      if (!strcmp(str, "CMD:")) { // this would signal start of real data
-        start_data = 1;
-      }
-    }
-    // here, we have some command string passed by the server
-    // decode per https://docs.google.com/a/emotorwerks.com/document/edit?id=1TVzRKtMFWPEW4NtdxmC2fR7k6HVeCz-Tlje8trELW9E
-    // for now, implement a minimal form of control - format of command is
-    // Aaa, where
-    // aa = amps to allow to draw, 0-60; 0 means turn OFF; JB to limit current to max set by user
-    sscanf(tempstr, "A%02d", &ampcmd);
-  }
-#endif
 #endif
 
   // temperature management
@@ -1045,75 +901,7 @@ int getTemp() {
   return (int(wADC) - 324) * 80 / 98;
 }
 
-
-//------------------------------ control MENUs -----------------------------------------
-// this is generally called by pressing 'A' button on the remote
-void ctrlMenu() {
-  byte pos = 0; // current position
-  const byte state_MENU = 0xFF;
-  const byte state_EXIT = 0x00;
-  const byte state_OUTC = 0x01;
-  const byte state_PRINTID = 0x02;
-  const byte state_TIME = 0x03;
-  const byte state_TIMEOFCHARGE_W_S = 0x04;
-  const byte state_CAL_C = 0x05;
-  const byte state_CAL_V = 0x06;
-  const byte maxpos = 4; // index of the last valid menu item
-
-  const byte state_TIMEOFCHARGE_W_E = 0x41;
-  const byte state_TIMEOFCHARGE_WE_S = 0x42;
-  const byte state_TIMEOFCHARGE_WE_E = 0x43;
-
-  byte mstate = state_MENU;
-  byte prev_mstate = 99;
-  byte btn = 0xFF; // which button was pressed - this will be set to the pin number
-  byte x = 0; // target position / variable
-
-  while (1) {
-    if (mstate != prev_mstate) {
-      myclrScreen();
-      btn = 0xFF; // reset button state
-    } else {
-      // block for button if the state is the same
-      btn = waitForBtn();
-    }
-    prev_mstate = mstate;
-
-    switch (mstate) {
-      case state_MENU:
-        // show menu
-        pos = 0;
-        if (btn == pin_ctrlBtn_A) {
-          if (x == 0) {
-            x = maxpos;
-          } else {
-            x--;
-          }
-        }
-        if (btn == pin_ctrlBtn_D) x++;
-        // by this time, pos=<number of menu entries>
-        if (x > maxpos) x = 0; // wrap around to top
-        printJBstr(0, 2 + pos, 2, 0, ( x == pos ? 0x3f : 0x1f ), 0, F("EXIT")); pos++;
-        printJBstr(0, 2 + pos, 2, 0, ( x == pos ? 0x3f : 0x1f ), 0, F("SET CURRENT")); pos++;
-        printJBstr(0, 2 + pos, 2, 0, ( x == pos ? 0x3f : 0x1f ), 0, F("PRINT ID")); pos++;
-        printJBstr(0, 2 + pos, 2, 0, ( x == pos ? 0x3f : 0x1f ), 0, F("SET CLOCK")); pos++;
-        printJBstr(0, 2 + pos, 2, 0, ( x == pos ? 0x3f : 0x1f ), 0, F("SET TIME OF USE")); pos++;
-        if (btn == pin_ctrlBtn_C) mstate = x;
-        break;
-
-      case state_EXIT:
-        return;
-        break;
-
-      case state_OUTC:
-        // set output curent
-        if (btn == pin_ctrlBtn_A) outC++;
-        if (btn == pin_ctrlBtn_D) outC--;
-        sprintf(str, "Setting for \noutV=%dV ", int(inV_AC));
-        printJBstr(0, 2, 2, 0x1f, 0x3f, 0x1f, str);
-        sprintf(str, "outC: %dA ", int(outC));
-        printJBstr(0, 5, 2, 0x1f, 0x3f, 0, str);
-        if (btn == pin_ctrlBtn_C) {
+/*
           if (inV_AC == 120) {
             configuration.outC_120 = outC;
           } else {
@@ -1121,207 +909,16 @@ void ctrlMenu() {
           }
           // need to write to config the new value
           EEPROM_writeAnything(0, configuration);
-
-          mstate = state_MENU; // back to menu
-        }
-        break;
-
-      case state_PRINTID:
-        // print JuiceBox ID if requested - required to associate the JuiceBox with online account
-        // this is button D on the remote!
-        for (int iii = 0; iii < 5; iii++) {
-          sprintf(str, "%u %u", configuration.IDstamp[iii * 2], configuration.IDstamp[iii * 2 + 1]);
-          printJBstr(0, 2 + iii, 1, 0x1f, 0x3f, 0x1f, str);
-        }
-        if (btn == pin_ctrlBtn_C) mstate = state_MENU;
-        break;
-
-      case state_TIME:
-        // setting time
-        day = dayOfWeek();
-        hour = hourOfDay();
-        mins = minsOfHour();
-        // user setup of the day - 0=Monday
-        printClrMsg(F("Set day:\n'A' to change,\n'C' to select"), 50, 0, 0x3f, 0);
-        myLCD->printStr(0, 6, 2, 0x1f, 0x1f, 0, daysStr[day]); // print starting point
-        while (1) {
-          if (isBtnPressed(pin_ctrlBtn_A)) {
-            day++;
-            if (day > 6) day = 0;
-            myLCD->printStr(0, 6, 2, 0x1f, 0x1f, 0, daysStr[day]);
-            delay(100); // avoid double-button-press
-          }
-          if (isBtnPressed(pin_ctrlBtn_C)) {
-            while (isBtnPressed(pin_ctrlBtn_C));
-            break; // exit on timeout
-          }
-          delay(50);
-        }
-        // user setup of the time - in 24 hour clock
-        printClrMsg(F("Set time:\n'A' to change,\n'C' to select"), 50, 0, 0x3f, 0);
-        sprintf(str, "Hour: %02d  ", hour); myLCD->printStr(0, 7, 2, 0x1f, 0x1f, 0, str); // print starting point
-        while (1) {
-          if (isBtnPressed(pin_ctrlBtn_A)) {
-            hour++;
-            if (hour > 23) hour = 0;
-            sprintf(str, "Hour: %02d  ", hour); myLCD->printStr(0, 7, 2, 0x1f, 0x1f, 0, str); // print starting point
-            delay(100); // avoid double-button-press
-          }
-          if (isBtnPressed(pin_ctrlBtn_C)) {
-            while (isBtnPressed(pin_ctrlBtn_C));
-            break; // exit on timeout
-          }
-          delay(50);
-        }
-        sprintf(str, "Minute: %02d  ", mins); myLCD->printStr(0, 7, 2, 0x1f, 0x1f, 0, str); // print starting point
-        while (1) {
-          if (isBtnPressed(pin_ctrlBtn_A)) {
-            mins++;
-            if (mins > 59) mins = 0; // 60 minutes in an hour
-            sprintf(str, "Minute: %02d  ", mins); myLCD->printStr(0, 7, 2, 0x1f, 0x1f, 0, str); // print starting point
-            delay(100); // avoid double-button-press
-          }
-          if (isBtnPressed(pin_ctrlBtn_C)) {
-            break; // exit on timeout
-          }
-          delay(50);
-        }
-        // reset the clock offset
-        clock_offset = sec_up - long(day * 24 + hour) * 3600 - mins * 60;
-
-        // store current date & time in EEPROM
-        configuration.day = day;
-        configuration.hour = hour;
-        configuration.mins = mins;
-        EEPROM_writeAnything(0, configuration);
-
-        mstate = state_MENU;
-        break;
-
-      case state_TIMEOFCHARGE_W_S:
-        // setting allowed time of charge
-        myLCD->printStr(0, 6, 2, 0x1f, 0x3f, 0x1f, F("Set all to 0-24 to\ndisable timer"));
-        // allow editing 2 types of days (weekday & weekend), start and end time for every type
-        if (btn == pin_ctrlBtn_A && configuration.starttime[0] < 23) configuration.starttime[0]++; // operate on Monday's time
-        if (btn == pin_ctrlBtn_D && configuration.starttime[0] > 0) configuration.starttime[0]--;
-        sprintf(str, "Weekday:\nstart charge\n\n %02d:00 ", configuration.starttime[0]);
-        myLCD->printStr(0, 2, 2, 0, 0x3f, 0, str);
-        if (btn == pin_ctrlBtn_C) mstate = state_TIMEOFCHARGE_W_E;
-        break;
-      case state_TIMEOFCHARGE_W_E:
-        // setting allowed time of charge
-        // allow editing 2 types of days (weekday & weekend), start and end time for every type
-        if (btn == pin_ctrlBtn_A && configuration.endtime[0] < 24) configuration.endtime[0]++; // operate on Monday's time, allow to go to 24th hour
-        if (btn == pin_ctrlBtn_D && configuration.endtime[0] > 0) configuration.endtime[0]--;
-        sprintf(str, "Weekday:\nend charge\n\n %02d:00 ", configuration.endtime[0]);
-        myLCD->printStr(0, 2, 2, 0, 0x3f, 0, str);
-        if (btn == pin_ctrlBtn_C) mstate = state_TIMEOFCHARGE_WE_S;
-        break;
-      case state_TIMEOFCHARGE_WE_S:
-        // setting allowed time of charge
-        // allow editing 2 types of days (weekday & weekend), start and end time for every type
-        if (btn == pin_ctrlBtn_A && configuration.starttime[1] < 23) configuration.starttime[1]++; // operate on Saturday's time
-        if (btn == pin_ctrlBtn_D && configuration.starttime[1] > 0) configuration.starttime[1]--;
-        sprintf(str, "WeekEND\nstart charge\n\n %02d:00 ", configuration.starttime[1]);
-        myLCD->printStr(0, 2, 2, 0, 0x3f, 0, str);
-        if (btn == pin_ctrlBtn_C) mstate = state_TIMEOFCHARGE_WE_E;
-        break;
-      case state_TIMEOFCHARGE_WE_E:
-        // setting allowed time of charge
-        // allow editing 2 types of days (weekday & weekend), start and end time for every type
-        if (btn == pin_ctrlBtn_A && configuration.endtime[1] < 24) configuration.endtime[1]++; // operate on Saturday's time, allow to go to 24th hour
-        if (btn == pin_ctrlBtn_D && configuration.endtime[1] > 0) configuration.endtime[1]--;
-        sprintf(str, "WeekEND\nend charge\n\n %02d:00 ", configuration.endtime[1]);
-        myLCD->printStr(0, 2, 2, 0, 0x3f, 0, str);
-        if (btn == pin_ctrlBtn_C) {
-          // write out into the EEPROM config
-          EEPROM_writeAnything(0, configuration);
-          mstate = state_MENU;
-        }
-        break;
-
-      default:
-        break;
-    }
-
-    // print button menu
-    printJBstr(0, 9, 2, 0, 0, 0x1f, F("A=UP, D=DOWN \nB=WPS, C=SELECT"));
-
-    // delay(50); // some short delay between re-renderings
-  }
-}
-
-// process remote button presses
-// this is a BLOCKING call
-byte waitForBtn() {
-  while (1) {
-    if (isBtnPressed(pin_ctrlBtn_A)) return pin_ctrlBtn_A;
-    // no B button - reserved for WPS
-    if (isBtnPressed(pin_ctrlBtn_C)) return pin_ctrlBtn_C;
-    if (isBtnPressed(pin_ctrlBtn_D)) return pin_ctrlBtn_D;
-    delay(10); // very small delay to not overload CPU too much
-  }
-}
+*/
 //------------------------------ END control MENUs -------------------------------------
 
-
-//------------------------------ printing help functions -------------------------
-void printJBstr(byte col, byte row, byte font, byte c1, byte c2, byte c3, const __FlashStringHelper *fstr) {
-  if (LCD_on) {
-    myLCD->printStr(col, row, font, c1, c2, c3, fstr);
-  } else {
-#ifndef RASPI
-    Serial.print("    ");
-    Serial.println(fstr);
-#endif
-  }
-}
-void printJBstr(byte col, byte row, byte font, byte c1, byte c2, byte c3, const char *sstr) {
-  if (LCD_on) {
-    myLCD->printStr(col, row, font, c1, c2, c3, sstr);
-  } else {
-#ifndef RASPI
-    Serial.print("    ");
-    Serial.println(sstr);
-#endif
-  }
-}
-void printClrMsg(const __FlashStringHelper *fstr, const int del, const byte red, const byte green, const byte blue) {
-  myclrScreen();
-  printJBstr(0, 2, 2, red, green, blue, fstr);
-  delay(del);
-}
-void printClrMsg(const char *str, const int del, const byte red, const byte green, const byte blue) {
-  myclrScreen();
-  printJBstr(0, 2, 2, red, green, blue, str);
-  delay(del);
-}
 void printErrorMsg(const __FlashStringHelper *fstr, const int del) {
-  printClrMsg(fstr, 30000, 0x1f, 0x3f, 0);
   // also send a message to server if WiFI is enabled
 #ifdef JB_WiFi_simple
   sendWiFiMsg(fstr, 1);
 #endif
 }
 
-
-// custom clear screen function. prints some header info
-void myclrScreen() {
-  if (LCD_on) {
-    myLCD->clrScreen();
-  } else {
-#ifndef RASPI
-    Serial.println("\n");
-#endif
-  }
-  printTime();
-}
-// print time etc on the first line
-void printTime() {
-  // have to use tempstr here (using str[] would result in corruption of other printouts)
-  sprintf(tempstr, "%s %02d:%02d (%d,%d) ", VerStr, hourOfDay(), minsOfHour(), state, PCBtemp);
-  printJBstr(0, 0, 2, 0x1f, 0, 0x1f, tempstr);
-}
 
 
 #ifdef JB_WiFi_simple
@@ -1344,17 +941,22 @@ void sendWiFiMsg(char *str)
   Serial.print(",");
   Serial.println(endFlag);
 #endif
+}
 
-#ifndef RASPI
-  for (int iii = 0; iii < 10; iii++) {
-    wifiSerial.print(configuration.IDstamp[iii]); // 10-50 digit ID - unique to each JuiceBox
+void sendButtonMsg(char button)
+{
+  Serial.print(startFlag);
+  Serial.print(",");
+  Serial.print(9);
+  Serial.print(",");
+  for (int iii = 0; iii < 10; iii++)
+  {
+    Serial.print(configuration.IDstamp[iii]); // 10-50 digit ID - unique to each JuiceBox
   }
-  wifiSerial.print(":");
-  // print data now
-  wifiSerial.print(str);
-  wifiSerial.print(":");
-  wifiSerial.println(UDPpacketEndSig);
-#endif
+  Serial.print(",");
+  Serial.print(button);
+  Serial.print(",");
+  Serial.println(endFlag);
 }
 
 void sendWiFiMsg(const __FlashStringHelper *fstr, int dummy) {
@@ -1375,17 +977,6 @@ void sendWiFiMsg(const __FlashStringHelper *fstr, int dummy) {
   Serial.print(",");
   Serial.println(endFlag);
   //Serial.println(UDPpacketEndSig);
-#endif
-
-#ifndef RASPI
-  for (int iii = 0; iii < 10; iii++) {
-    wifiSerial.print(configuration.IDstamp[iii]); // 10-50 digit ID - unique to each JuiceBox
-  }
-  wifiSerial.print(":");
-  // print data now
-  wifiSerial.print(fstr);
-  wifiSerial.print(":");
-  wifiSerial.println(UDPpacketEndSig);
 #endif
 }
 //===================== END WiFi messaging functions ===========================================
@@ -1457,4 +1048,8 @@ void delaySecs(int secs) {
   for (int si = 0; si < secs; si++) delay(1000);
 }
 
+void wait(unsigned long secs)
+{
+	
+}
 
