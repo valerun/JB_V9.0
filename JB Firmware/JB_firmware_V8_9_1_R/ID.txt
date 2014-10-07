@@ -1,0 +1,38 @@
+#define Ver "V8.9.1"
+
+
+
+void setup()
+{
+
+  convertChar(Ver, buf);
+    
+  strcpy(buffer, __TIME__);
+  convertChar(buffer, buf);
+
+  strcpy(buffer, __DATE__);
+  convertChar(buffer, buf);
+  
+  randomSeed(analogRead(4));
+  strcat(buf, itoa(random(1000, 9999), buffer, 10));
+  
+}
+
+void loop()
+{
+}
+
+void convertChar(char *bin, char *bout) 
+{
+  for(int i = 0; i < strlen(bin); i++) {
+    if( (bin[i]>=0x30 && bin[i]<0x3A) || (bin[i]>0x40 && bin[i]<0x7B) ) {
+      if(bin[i]>0x40) {
+        bout[ii++]=0x30+(bin[i]-0x40)/10;
+        bout[ii++]=0x30+(bin[i]-0x40)%10;
+      } else {
+        bout[ii++]=bin[i];
+      }
+    }
+  }
+  buf[ii++]=0x2D;  
+}

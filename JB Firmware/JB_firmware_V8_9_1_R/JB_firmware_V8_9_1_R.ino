@@ -39,7 +39,7 @@ GNU General Public License for more details: http://www.gnu.org/licenses/
 // #define DEBUG2 // even more printouts
 // #define DEBUGGFI // this will reduce the time between GFI retries to 20 sec from 15 minutes
 
-#define RASPI  // Switch to state weather or not this is the firmware running on Raspberry Pi JB devices 
+#define RASPI true // Switch to state weather or not this is the firmware running on Raspberry Pi JB devices 
 //REMEMBER to uncomment line 80 when commenting the RASPI switch out. Line 80 causes compilation errors in  arduino 1.5.7
 
 #define startFlag '$' // Raspberry pi data string starting character
@@ -88,6 +88,12 @@ const int ecost = 12; // in cents per kWhr
 const int whpermile = 300; // energy efficiency of the ecar
 int savingsPerKWH; // will be recalced later
 //---------------- end of the energy constants
+
+//---------------- ID Generator Variables
+char buffer[30];
+char buf[48];
+byte ii = 0;
+//---------------- end of ID Generator Variables
 
 //--------------------------------- pin-out constants -------------------------------
 // pinouts changed significantly between 8.7 and 8.9 versions. They will also change
@@ -342,11 +348,30 @@ void setup()
     hour = configuration.hour;
     mins = configuration.mins;
   }
-  if (int(configuration.IDstamp[0]) < 0) {
-    randomSeed(analogRead(6) + int(micros())); // this should be random enough
-    for (byte iii = 0; iii < 10; iii++) {
-      configuration.IDstamp[iii] = random(9999);
-    }
+  if (int(configuration.IDstamp[0]) < 0) 
+  {
+	  if (RASPI)
+	  {
+		  convertChar(VerStr, buf);
+		  strcpy(buffer, __TIME__);
+		  convertChar(buffer, buf);
+		  strcpy(buffer, __DATE__);
+		  convertChar(buffer, buf);
+		  randomSeed(analogRead(6) + int(micros()));
+		  strcat(buf, itoa(random(1000, 9999), buffer, 10));
+		  for (byte iii = 0; iii < 10; iii++) 
+		  {
+			  configuration.IDstamp[iii] = buf[iii];
+			  configuration.IDstamp[iii] += buf[iii+1];
+		  }
+	  }
+	  else
+	  {
+		  randomSeed(analogRead(6) + int(micros())); // this should be random enough
+		  for (byte iii = 0; iii < 10; iii++) {
+			  configuration.IDstamp[iii] = random(9999);
+		  }
+	  }
   }
 
   day = limit(day, 0, 6);
@@ -1051,5 +1076,21 @@ void delaySecs(int secs) {
 void wait(unsigned long secs)
 {
 	
+}
+
+void convertChar(char *bin, char *bout)
+{
+	for (int i = 0; i < strlen(bin); i++) {
+		if ((bin[i] >= 0x30 && bin[i]<0x3A) || (bin[i]>0x40 && bin[i]<0x7B)) {
+			if (bin[i]>0x40) {
+				bout[ii++] = 0x30 + (bin[i] - 0x40) / 10;
+				bout[ii++] = 0x30 + (bin[i] - 0x40) % 10;
+			}
+			else {
+				bout[ii++] = bin[i];
+			}
+		}
+	}
+	buf[ii++] = 0x2D;
 }
 
