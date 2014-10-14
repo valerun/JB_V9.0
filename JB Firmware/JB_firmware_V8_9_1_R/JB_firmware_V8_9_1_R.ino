@@ -93,7 +93,10 @@ int savingsPerKWH; // will be recalced later
 char buffer[30];
 char buf[48];
 byte ii = 0;
-//---------------- end of ID Generator Variables
+//--------------- end of ID Generator Variables
+
+int vals = 0;   
+char response[20];
 
 //--------------------------------- pin-out constants -------------------------------
 // pinouts changed significantly between 8.7 and 8.9 versions. They will also change
@@ -488,6 +491,7 @@ void setup()
 void loop() 
 {
   // check if the car is there and requesting power
+  getSerialData();
   prev_state = state;
   state = getState(); // this is a blocking call for <100ms
   //state = STATE_C;
@@ -1094,3 +1098,29 @@ void convertChar(char *bin, char *bout)
 	buf[ii++] = 0x2D;
 }
 
+void processData() 
+{
+  if(response[0] == 's') {
+      Serial.println(response);
+    }
+    else
+    {
+    }
+}
+
+void getSerialData()
+{
+   if (Serial.available() ) {
+    int dataCounter = 0;
+    while((vals = Serial.read()) != ':') {
+      if(vals!= -1) {
+        response[dataCounter] = vals;
+        ++dataCounter;
+      }
+    }
+    processData();
+    response[dataCounter] = ':';
+    response[dataCounter+1] = '\0';
+    Serial.println(response);
+  }
+}
