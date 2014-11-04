@@ -40,10 +40,11 @@ GNU General Public License for more details: http://www.gnu.org/licenses/
 // #define DEBUGGFI // this will reduce the time between GFI retries to 20 sec from 15 minutes
 
 #define RASPI true // Switch to state weather or not this is the firmware running on Raspberry Pi JB devices 
-//REMEMBER to uncomment line 80 when commenting the RASPI switch out. Line 80 causes compilation errors in  arduino 1.5.7
 
 #define startFlag '$' // Raspberry pi data string starting character
 #define endFlag '#' // Raspberry pi data string ending character
+String inputString = "";         // a string to hold incoming data
+boolean stringComplete = false;  // whether the string is complete
 
 // the following results in much more frequent reporting of data by JuiceBox to EmotorWerks servers
 // PLEASE DO NOT USE in your JuiceBox UNLESS AUTHORIZED BY EMotorWerks - this overloads our servers
@@ -56,8 +57,8 @@ const int V_AC_threshold = 164; // normally 164 (midpoint between 120V and 208V
 const int V_AC_sensitivity = 204; // normally 182 for V8.9 boards with 0.5s delay (empirical)
 // #define JB_WiFi // is WiFi installed & we are using WiFlyHQ library?
 #define JB_WiFi_simple // is WiFi installed and we are just pushing data?
-#define JB_WiFi_RTC // are we using WiFi RTC function (once per power-up - thanks David Early for code contibution!)
-#define JB_WiFi_control // is this JuiceBox controllable with WiFi (through HTTP responses)
+//#define JB_WiFi_RTC // are we using WiFi RTC function (once per power-up - thanks David Early for code contibution!)
+//#define JB_WiFi_control // is this JuiceBox controllable with WiFi (through HTTP responses)
 #define VerStr "V8.9.1" // detailed exact version of firmware (thanks Gregg!)
 #define GFI // need to be uncommented for GFI functionality
 #define trim120current // V8.7+ boards allow adjustment of 120V current
@@ -97,6 +98,7 @@ byte ii = 0;
 
 int vals = 0;   
 char response[20];
+int dataCounter = 0;
 
 //--------------------------------- pin-out constants -------------------------------
 // pinouts changed significantly between 8.7 and 8.9 versions. They will also change
@@ -393,7 +395,9 @@ void setup()
   if (!digitalRead(pin_ctrlBtn_D)) REMOTE_ON = 1;
 
   EEPROM_writeAnything(0, configuration);
-
+  
+  inputString.reserve(200);
+  
   //---------------------------- calibrate state boundaries ---------------------------------------------
   // first, need to record a minimum value of the wave - needed for pilot voltage measurement later on
   // set output pin to negative rail
@@ -492,6 +496,7 @@ void loop()
 {
   // check if the car is there and requesting power
   getSerialData();
+  
   prev_state = state;
   state = getState(); // this is a blocking call for <100ms
   //state = STATE_C;
@@ -1100,20 +1105,33 @@ void convertChar(char *bin, char *bout)
 
 void processData() 
 {
-  if(response[0] == 's') {
-      Serial.println(response);
-    }
-    else
-    {
-    }
+  if(response[0] == 'i') 
+  {
+      if (inV_AC > 160) configuration.outC_240++;
+      else configuration.outC_120++;
+  }
+  else if(response[0] == 'd')
+  {
+    if (inV_AC > 160) configuration.outC_240--;
+      else configuration.outC_120--;
+  }
+  else
+  {
+    response[dataCounter] = ':';
+    response[dataCounter+1] = '\0';
+    Serial.println(response);
+  }
 }
 
 void getSerialData()
 {
-   if (Serial.available() ) {
-    int dataCounter = 0;
-    while((vals = Serial.read()) != ':') {
-      if(vals!= -1) {
+   if (Serial.available() ) 
+   {
+    dataCounter = 0;
+    while((vals = Serial.read()) != ':') 
+    {
+      if(vals!= -1) 
+      {
         response[dataCounter] = vals;
         ++dataCounter;
       }
@@ -1121,6 +1139,5 @@ void getSerialData()
     processData();
     response[dataCounter] = ':';
     response[dataCounter+1] = '\0';
-    Serial.println(response);
   }
 }
