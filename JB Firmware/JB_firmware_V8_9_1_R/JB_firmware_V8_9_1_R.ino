@@ -288,7 +288,7 @@ ISR(TIMER2_COMPA_vect)
 void setup() 
 {
   wdt_disable();
-
+  Serial.begin(9600);
   // set digital input pins
   pinMode(pin_GFI, INPUT);
   pinMode(pin_ctrlBtn_A, INPUT);
@@ -590,13 +590,14 @@ void loop()
       if (inV_AC > 160) configuration.outC_240--;
       else configuration.outC_120--;
     }
-    #endif
+    //EEPROM_writeAnything(0, configuration);
+   #endif
     
 #ifdef RASPI
     if ( int(sec_up - timer_sec) > type2_reportMask || timer_sec == 0) {
       timer_sec = sec_up;
 
-      sprintf(str, "%d,%d,%d,%d,%d", int(inV_AC), int(configuration.energy + energy), int(energy * 10), int(outC_meas * 10), int(power * 10));
+      sprintf(str, "%d,%d,%d,%d,%d,%d", int(inV_AC), int(configuration.energy + energy), int(energy * 10), int(outC_meas * 10), int(power * 10), int(outC));
       sendWiFiMsg(str);
     }
 #endif
@@ -625,11 +626,11 @@ void loop()
 
     int savings = int(configuration.energy * savingsPerKWH / 100);
 
-#ifndef RASPI
+//#ifndef RASPI
       // no LCD
       sprintf(str, "%dV, %dA", int(inV_AC), int(outC));
       Serial.println(str);
-#endif
+//#endif
 
 #ifdef DEBUG
       // print ID - only in non-LCD mode so not to clutter anything
@@ -753,13 +754,8 @@ void setOutC() {
   // different trimpot depending on voltage
   if (inV_AC == 120) {
 #ifdef trim120current
-    if (configuration.outC_120 > 0 && LCD_on) { // if in Premium config and EEPROM is set, override trimpot setting
+    if (configuration.outC_120 > 0) { // if in Premium config and EEPROM is set, override trimpot setting
       outC = configuration.outC_120;
-    } else {
-      throttle = analogRead(pin_throttle120) / 1024.;
-      if (throttle > minThrottle) { // if something is set on the throttle pot, use that instead of the default outC
-        outC = throttle * nominal_outC_120V * 2; // full range is 2x of nominal
-      }
     }
 #else
     outC = min(nominal_outC_120V, outC);
@@ -769,16 +765,12 @@ void setOutC() {
     if (ampcmd != 0xFF) { // if remote command is set, it will override anything else (but only in 240V connection)
       outC = ampcmd;
     } else {
-      if (configuration.outC_240 > 0 && LCD_on) { // if in Premium config and EEPROM is set, override trimpot setting
+      if (configuration.outC_240 > 0) { // if in Premium config and EEPROM is set, override trimpot setting
         outC = configuration.outC_240;
-      } else {
-        throttle = analogRead(pin_throttle) / 1024.;
-        if (throttle > minThrottle) { // if something is set on the throttle pot, use that instead of the default outC
-          outC = throttle * maxC;
-        }
       }
     }
-  }
+    }
+  //}
 
   // per J1772 standard:
   // 1% duty = 0.6A until 85% duty cycle
@@ -1107,13 +1099,31 @@ void processData()
 {
   if(response[0] == 'i') 
   {
+    Serial.println("Increasing Current");
       if (inV_AC > 160) configuration.outC_240++;
       else configuration.outC_120++;
+    EEPROM_writeAnything(0, configuration);
+      /*if (inV_AC > 160) configuration.outC_240++;
+      else configuration.outC_120++;
+      EEPROM_readAnything(0, configuration);
+      setOutC();
+*/
   }
   else if(response[0] == 'd')
   {
+    Serial.println("Decreasing Current");
+      if (inV_AC > 160) configuration.outC_240--;
+      else configuration.outC_120--;
+    /*
     if (inV_AC > 160) configuration.outC_240--;
       else configuration.outC_120--;
+      EEPROM_readAnything(0, configuration);
+      setOutC();
+      */
+  }
+  else if(response[0] == 's')
+  {
+    Serial.println("Self Destruct Initiated");
   }
   else
   {
@@ -1136,6 +1146,7 @@ void getSerialData()
         ++dataCounter;
       }
     }
+    while(Serial.read() != -1);
     processData();
     response[dataCounter] = ':';
     response[dataCounter+1] = '\0';
